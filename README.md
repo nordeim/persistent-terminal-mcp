@@ -1,689 +1,440 @@
-# Persistent Terminal MCP Server
+# Persistent Terminal — MCP Server
 
-一个功能强大的 Model Context Protocol (MCP) 服务器，基于 TypeScript 和 [`node-pty`](https://github.com/microsoft/node-pty) 实现持久化终端会话管理。即使客户端断开连接，终端命令也会继续运行，特别适合 Claude、Cursor、Cline 等 AI 助手执行长时间任务。
-油管视频地址：https://youtu.be/nfLi1IZxhJs
+**Persistent Terminal MCP Server** is a TypeScript-based server that provides **persistent, resumable terminal sessions** using `node-pty`. It’s designed for integration with Model Context Protocol (MCP) clients (e.g., Claude Desktop / Claude Code, Cursor, Cline) and is optimized for long-running commands and workflows where the client may disconnect and later resume the session.
 
-Windows 配置mcp 视频教程地址：https://youtu.be/WYEKwTQCAnc
+- Built with TypeScript + `node-pty`
+- Keeps shell sessions alive across client disconnects
+- Web management UI (xterm.js) + REST endpoints
+- Intelligent output handling (circular buffer, spinner compression, head/tail modes)
+- Integrations for automated fixes and tooling
 
-## ✨ 核心特性
+YouTube Demo: https://youtu.be/nfLi1IZxhJs  
+Windows MCP Setup Guide: https://youtu.be/WYEKwTQCAnc
 
-### 🔥 持久化终端会话
-- **长期运行**：创建、复用、管理长期运行的 Shell 会话
-- **断线续传**：客户端断开后终端继续运行，重连后可继续操作
-- **多会话管理**：同时管理多个独立的终端会话
-- **自动清理**：超时会话自动清理，避免资源泄漏
+---
 
-### 🧠 智能输出管理
-- **循环缓冲区**：可配置大小（默认 10,000 行），自动管理内存
-- **多种读取模式**：
-  - `full`：完整输出
-  - `head`：只读取开头 N 行
-  - `tail`：只读取末尾 N 行
-  - `head-tail`：同时读取开头和末尾
-- **增量读取**：使用 `since` 参数只读取新增内容
-- **Token 估算**：自动估算输出的 token 数量，方便 AI 控制上下文
+## Table of Contents
 
-### 🎨 Spinner 动画压缩
-- **自动检测**：识别常见的进度动画字符（⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏, ◐◓◑◒ 等）
-- **智能节流**：减少 `npm install`、`yarn`、`pnpm` 等命令的噪音输出
-- **保留关键信息**：压缩动画的同时保留真实日志
-- **灵活配置**：可通过环境变量或参数控制开关
+1. [Why This Project](#why-this-project)  
+2. [Highlights & Features](#highlights--features)  
+3. [Quick Start](#quick-start)  
+4. [Local Development](#local-development)  
+5. [Usage & Examples](#usage--examples)  
+6. [MCP Protocol — Design & Endpoints](#mcp-protocol---design--endpoints)  
+7. [REST API](#rest-api)  
+8. [Web UI](#web-ui)  
+9. [Configuration & Environment Variables](#configuration--environment-variables)  
+10. [Security & Best Practices](#security--best-practices)  
+11. [Deployment](#deployment)  
+12. [Contributing](#contributing)  
+13. [License & Acknowledgements](#license--acknowledgements)  
 
-### 🌐 Web 可视化管理界面
-- **实时终端**：基于 xterm.js 的终端渲染，支持完整 ANSI 颜色
-- **WebSocket 推送**：终端输出实时显示，无需刷新
-- **交互操作**：直接在浏览器中发送命令、查看输出
-- **多实例支持**：自动端口分配，支持多个 AI 客户端同时使用
-- **VS Code 风格**：暗色主题，简洁美观的界面设计
+---
 
-### 🤖 Codex 自动修复 Bug
-- **完全自动化**：集成 OpenAI Codex CLI，自动修复代码 Bug
-- **文档驱动**：AI 描述保存为 MD 文档，Codex 读取并修复
-- **详细报告**：生成完整的修复报告，包含修改前后对比
-- **智能等待**：自动检测 Codex 执行完成，默认超时 10 分钟
-- **历史记录**：所有 Bug 描述和修复报告永久保存在 docs/ 目录
+## Why This Project
 
-### 🔌 多种集成方式
-- **MCP 协议**：原生支持 Claude Desktop、Claude Code、Cursor、Cline 等客户端
-- **REST API**：提供 HTTP 接口，方便非 MCP 场景集成
-- **严格兼容**：完全符合 MCP stdio 协议规范，stdout 纯净无污染
+When AI assistants or remote tools run shell commands, two problems commonly appear:
 
-### 🛡️ 稳定性保障
-- **输出稳定检测**：`wait_for_output` 工具确保获取完整输出
-- **交互式应用支持**：完美支持 vim、npm create 等交互式程序
-- **ANSI 转义序列**：正确处理终端控制字符
-- **错误恢复**：自动重连、异常处理机制
+1. **Ephemeral sessions** — when the client disconnects, long-running commands terminate.  
+2. **No easy resume** — re-establishing context/output reliably is hard.
 
-## 🚀 安装方式
+This server solves both by providing **persistent PTY-backed sessions** with robust output buffering, incremental reads, and a small web UI for inspection and control. It's particularly useful for AI agents that must perform multi-step, long-running tasks while preserving context and logs.
 
-### ✅ 快速运行（推荐）
-无需安装，直接使用 `npx` 启动：
+---
+
+## Highlights & Features
+
+### Session Management
+- Create, reuse, and kill named terminal sessions.
+- Sessions continue running after client disconnect.
+- Sessions idle-cleaned to prevent resource leaks.
+
+### Output Management
+- **Circular buffer** with configurable capacity (default: 10,000 lines).
+- Read modes:
+  - `full` — return complete buffer
+  - `head` — first N lines
+  - `tail` — last N lines
+  - `head-tail` — N lines from the start and end
+- **Incremental reads** using `since` token/offset — only new output is returned.
+- **Token estimation** to help downstream AI context budgeting.
+
+### Spinner & Animation Compression
+- Detects and compresses noisy spinner animations (e.g., CLI spinners).
+- Reduces log spam while preserving useful output.
+- Configurable detection thresholds and behavior.
+
+### Web Management UI
+- Live terminal viewer (xterm.js) with ANSI color support.
+- Real-time streaming via WebSocket.
+- Browser-based command run, session list, and session control.
+
+### Integration & Extensibility
+- Built to speak the MCP protocol (for direct AI integrations).
+- Optional REST endpoints for non-MCP clients.
+- Hooks for automated fixes (e.g., Codex-based fix flows) and custom tooling.
+
+### Reliability
+- `wait_for_output` and stabilization logic ensure full logs are retrieved from interactive programs.
+- Handles ANSI control sequences correctly.
+- Automatic reconnect/recovery behavior.
+
+---
+
+## Quick Start
+
+### Run Immediately (no install)
 ```bash
 npx persistent-terminal-mcp
-```
+````
 
-REST 版本同样支持：
+Or the REST-only variant:
+
 ```bash
 npx persistent-terminal-mcp-rest
 ```
 
-### 📦 引入到现有项目
+### Install as a Dependency
+
 ```bash
 npm install persistent-terminal-mcp
 ```
 
-安装后即可在代码中引用所有核心类与类型：
+Then import and run in TypeScript:
+
 ```ts
 import { PersistentTerminalMcpServer } from 'persistent-terminal-mcp';
+
+const server = new PersistentTerminalMcpServer({ /* options */ });
+await server.start();
 ```
 
-### 🌐 全局安装（可选）
+### Global Install
+
 ```bash
 npm install --global persistent-terminal-mcp
+# then
 persistent-terminal-mcp
 ```
 
-## 🧪 本地开发
-适合想要修改源码或深入调试的场景：
+---
+
+## Local Development
+
+Clone the repo and run locally for development:
+
 ```bash
-npm install          # 安装依赖
-npm run build        # 编译 TypeScript → dist/
-npm start            # 通过 stdio 启动 MCP 服务器
+git clone <repo-url>
+cd persistent-terminal-mcp
+npm install
+npm run build       # compile TypeScript → dist/
+npm start           # run compiled server
 ```
 
-开发阶段也可直接运行 TypeScript 源码：
+Run from source (recommended during development):
+
 ```bash
-npm run dev          # MCP 服务器 (tsx)
-npm run dev:rest     # REST 服务器 (tsx)
+npm run dev         # run the server against TS source with tsx
+npm run dev:rest    # run the REST-only variant in dev mode
 ```
 
-### 🐞 调试模式
-启用调试日志（输出到 stderr，不会干扰 MCP 通信）：
+Examples and test scripts:
+
 ```bash
-MCP_DEBUG=true persistent-terminal-mcp
+npm run example:basic    # demo: create → write → read → kill
+npm run example:smart    # demo: head/tail/incremental reads
+npm run example:spinner  # demo: spinner compression
+npm run example:webui    # launch web UI demo
+npm run test:tools       # run tool validation tests
+npm run test:fixes       # run fix/regression tests
 ```
 
-### 📚 示例脚本
+Enable debug logging (writes to stderr — safe for MCP stdio):
+
 ```bash
-npm run example:basic        # 基础操作：创建 → 写入 → 读取 → 终止
-npm run example:smart        # 智能读取：head/tail/head-tail 模式演示
-npm run example:spinner      # Spinner 压缩功能演示
-npm run example:webui        # Web UI 功能演示
-npm run test:tools           # 全量验证所有 MCP 工具
-npm run test:fixes           # 关键修复的回归测试
+MCP_DEBUG=true npm start
 ```
 
-## ⚙️ MCP 客户端配置
+---
 
-### Claude Desktop
+## Usage & Examples
 
-#### macOS / Linux
+### Basic MCP Flow (conceptual)
 
-**配置文件位置**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+1. Client opens an MCP session to server.
+2. Client requests creation of a named terminal (or attaches to existing).
+3. Client writes a command to the terminal.
+4. Server runs the command inside a node-pty shell and buffers output.
+5. Client may disconnect; the process keeps running.
+6. Later, client reconnects and requests output since the previous offset (incremental read) or full read.
 
-在配置文件中添加以下内容：
+### Common Operations
+
+* Create terminal: returns session ID
+* Write: send input to the PTY (stdin)
+* Read: fetch output with `mode` and `since` options
+* List: get active sessions and metadata
+* Kill: terminate session and child processes
+* Inspect: get process tree, working dir, and environment snapshot
+
+(See the [API section](#mcp-protocol---design--endpoints) for detailed wire format examples.)
+
+---
+
+## MCP Protocol — Design & Endpoints
+
+> This project implements a custom MCP surface for managing persistent PTY sessions. The following summarizes the key messages and semantics.
+
+### Session Model
+
+* Each session has:
+
+  * `sessionId` (string)
+  * `name` (optional friendly name)
+  * `createdAt` timestamp
+  * `lastActiveAt` timestamp
+  * `status` (`running`, `exited`, `errored`)
+  * `buffer` — circular buffer of stdout/stderr lines + offsets
+
+### Main Actions (high level)
+
+* `CreateTerminal` — create a new PTY session (options: shell, cwd, env, cols/rows)
+* `AttachTerminal` — attach to an existing PTY by `sessionId`
+* `Write` — send input to PTY
+* `Read` — read buffered output (supports `mode`, `since`, `lines`)
+* `ListSessions` — enumerate active sessions
+* `KillSession` — terminate session and children
+* `GetMeta` — retrieve session metadata and process info
+
+### Read Modes & Parameters
+
+* `mode`: `full` | `head` | `tail` | `head-tail`
+* `lines`: integer number of lines for `head`/`tail`
+* `since`: opaque offset or numeric token indicating only output after this marker is desired
+* `stabilize`: boolean/timeout to wait for output to stabilize (useful for interactive commands)
+
+### Example: Read Tail
+
+Client request:
 
 ```json
 {
-  "mcpServers": {
-    "persistent-terminal": {
-      "command": "npx",
-      "args": ["-y", "persistent-terminal-mcp"],
-      "env": {
-        "MAX_BUFFER_SIZE": "10000",
-        "SESSION_TIMEOUT": "86400000",
-        "COMPACT_ANIMATIONS": "true",
-        "ANIMATION_THROTTLE_MS": "100"
-      }
-    }
+  "action": "Read",
+  "sessionId": "abc123",
+  "options": {
+    "mode": "tail",
+    "lines": 200,
+    "since": "offset-456"
   }
 }
 ```
 
-**说明**：
-- `-y` 参数会自动确认 npx 的下载提示
-- 若已全局安装（`npm install -g persistent-terminal-mcp`），可将 `command` 改为 `"persistent-terminal-mcp"` 并移除 `args` 中的 `-y`
+Server response contains:
 
-#### Windows
-
-**配置文件位置**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "persistent-terminal": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "persistent-terminal-mcp"],
-      "env": {
-        "MAX_BUFFER_SIZE": "10000",
-        "SESSION_TIMEOUT": "86400000",
-        "COMPACT_ANIMATIONS": "true",
-        "ANIMATION_THROTTLE_MS": "100"
-      }
-    }
-  }
-}
-```
-
-**说明**：
-- Windows 需要通过 `cmd /c` 来调用 `npx`
-- 若已全局安装，可将 `args` 改为 `["/c", "persistent-terminal-mcp"]`
+* `lines`: array of strings (output)
+* `nextOffset`: token to use for subsequent incremental reads
+* `truncated`: boolean — true if output was truncated due to buffer size
 
 ---
 
-### Claude Code
+## REST API
 
-#### macOS / Linux
+A lightweight REST wrapper is provided for non-MCP integrations. The REST API exposes the same core features: create, write, read, list, kill.
 
-使用命令行快速添加：
+### Example Endpoints
+
+* `POST /sessions` — create session
+* `GET /sessions` — list sessions
+* `GET /sessions/:id` — get meta
+* `POST /sessions/:id/write` — write to session
+* `GET /sessions/:id/read` — read session output (query params for `mode`, `lines`, `since`)
+* `DELETE /sessions/:id` — kill session
+
+### Example: Read via REST
+
+```
+GET /sessions/abc123/read?mode=tail&lines=200&since=offset-456
+```
+
+Response:
+
+```json
+{
+  "lines": ["line1...", "line2..."],
+  "nextOffset": "offset-789",
+  "truncated": false
+}
+```
+
+> Note: When using the REST API in environments where request/response sizes are limited, use `tail`/`head`/`since` to avoid transferring huge logs.
+
+---
+
+## Web UI
+
+A small management UI is included to inspect and interact with sessions.
+
+Features:
+
+* Live terminal view with xterm.js (ANSI color support)
+* Session list and metadata
+* Buttons to create/kill sessions and run commands
+* WebSocket-backed live stream for low-latency updates
+
+Launch UI (development):
 
 ```bash
-claude mcp add persistent-terminal \
-  --env MAX_BUFFER_SIZE=10000 \
-  --env SESSION_TIMEOUT=86400000 \
-  --env COMPACT_ANIMATIONS=true \
-  --env ANIMATION_THROTTLE_MS=100 \
-  -- npx -y persistent-terminal-mcp
+npm run example:webui
+# or if installed globally
+persistent-terminal-mcp --web
 ```
 
-**或者**编辑配置文件 `~/.claude.json`：
-
-```json
-{
-  "mcpServers": {
-    "persistent-terminal": {
-      "command": "npx",
-      "args": ["-y", "persistent-terminal-mcp"],
-      "env": {
-        "MAX_BUFFER_SIZE": "10000",
-        "SESSION_TIMEOUT": "86400000",
-        "COMPACT_ANIMATIONS": "true",
-        "ANIMATION_THROTTLE_MS": "100"
-      }
-    }
-  }
-}
-```
-
-#### Windows
-
-> # ⚠️ **Windows 用户请注意**
->
-> ## **Claude Code** 在 Windows 下 `claude mcp add` 命令存在参数解析问题
->
-> ### **🚫 不推荐使用命令行方式**
->
-> 请参考专门的配置文档：
-> ### 📖 [《Windows 下配置 persistent-terminal MCP》](docs/clients/claude-code-windows.md)
->
-> 该文档提供了两种推荐方案：
-> - ✅ **项目级配置**（推荐）：在项目根目录创建 `.mcp.json` 文件
-> - ✅ **全局配置**：使用 Python 脚本修改 `~/.claude.json`
+The UI is intentionally minimal and developer-focused — it exists primarily to aid debugging and manual intervention.
 
 ---
 
-### Cursor / Cline
+## Configuration & Environment Variables
 
-配置方式与 Claude Desktop 类似，请参考各客户端的 MCP 配置文档。
+Configure behavior via environment variables or programmatic options when instantiating the server.
 
-### Codex
+Common environment variables:
 
-#### macOS / Linux
+* `MCP_PORT` — default port for REST/WebSocket (if running in network mode)
+* `MCP_DEBUG` — enable debug logs (writes to stderr)
+* `SESSION_IDLE_TIMEOUT` — milliseconds before idle session cleanup
+* `BUFFER_LINES` — number of lines to keep in the circular buffer (default 10000)
+* `SPINNER_COMPRESSION` — `true|false` to enable spinner compression
+* `MAX_SPAWN_RETRIES` — how many times to retry spawning a PTY before failing
 
-在 `.codex/config.toml` 文件中添加以下配置：
+Example `.env`:
 
-```toml
-# MCP Server Configuration (TOML Format)
-# 用于配置 persistent-terminal MCP 服务器
-
-[mcp_servers.persistent-terminal]
-command = "npx"
-args = ["-y", "persistent-terminal-mcp"]
-
-[mcp_servers.persistent-terminal.env]
-MAX_BUFFER_SIZE = "10000"
-SESSION_TIMEOUT = "86400000"
-COMPACT_ANIMATIONS = "true"
-ANIMATION_THROTTLE_MS = "100"
+```
+MCP_PORT=3456
+SESSION_IDLE_TIMEOUT=3600000
+BUFFER_LINES=10000
+SPINNER_COMPRESSION=true
 ```
 
-#### Windows
-
-在 `.codex/config.toml` 文件中添加以下配置：
-
-```toml
-# MCP Server Configuration (TOML Format)
-# 用于配置 persistent-terminal MCP 服务器
-
-[mcp_servers.persistent-terminal]
-command = "cmd"
-args = ["/c", "npx", "-y", "persistent-terminal-mcp"]
-
-[mcp_servers.persistent-terminal.env]
-MAX_BUFFER_SIZE = "10000"
-SESSION_TIMEOUT = "86400000"
-COMPACT_ANIMATIONS = "true"
-ANIMATION_THROTTLE_MS = "100"
-```
-
-**说明**：Windows 需要通过 `cmd /c` 来调用 `npx`
-
----
-
-### 环境变量说明
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `MAX_BUFFER_SIZE` | 缓冲区最大行数 | 10000 |
-| `SESSION_TIMEOUT` | 会话超时时间（毫秒） | 86400000 (24小时) |
-| `COMPACT_ANIMATIONS` | 是否启用 Spinner 压缩 | true |
-| `ANIMATION_THROTTLE_MS` | 动画节流时间（毫秒） | 100 |
-| `MCP_DEBUG` | 是否启用调试日志 | false |
-
-## 🧱 TypeScript 程序化使用
+Programmatic options (TypeScript):
 
 ```ts
-import {
-  PersistentTerminalMcpServer,
-  TerminalManager,
-  RestApiServer
-} from 'persistent-terminal-mcp';
-
-const manager = new TerminalManager();
-const rest = new RestApiServer(manager);
-await rest.start(3001);
-
-const mcpServer = new PersistentTerminalMcpServer();
-const server = mcpServer.getServer();
-await server.connect(/* 自定义 transport */);
+const server = new PersistentTerminalMcpServer({
+  bufferLines: 10000,
+  idleTimeoutMs: 60 * 60 * 1000, // 1 hour
+  spinnerCompression: true,
+  webPort: 3456
+});
 ```
-
-所有核心类和类型在包的根入口即可获取，详情可参考 `src/index.ts`。
-
-## 🛠️ MCP 工具一览
-
-| 工具 | 作用 | 主要参数 |
-|------|------|----------|
-| `create_terminal` | 创建持久终端会话 | `shell`, `cwd`, `env`, `cols`, `rows` |
-| `create_terminal_basic` | 精简版创建入口 | `shell`, `cwd` |
-| `write_terminal` | 向终端写入命令 | `terminalId`, `input`, `appendNewline` |
-| `read_terminal` | 读取缓冲输出 | `terminalId`, `mode`, `since`, `stripSpinner` |
-| `wait_for_output` | 等待输出稳定 | `terminalId`, `timeout`, `stableTime` |
-| `get_terminal_stats` | 查看统计信息 | `terminalId` |
-| `list_terminals` | 列出所有活跃终端 | 无 |
-| `kill_terminal` | 终止会话 | `terminalId`, `signal` |
-| `open_terminal_ui` | 打开 Web 管理界面 | `port`, `autoOpen` |
-| `fix_bug_with_codex` 🆕 | 使用 Codex 自动修复 Bug | `description`, `cwd`, `timeout` |
-
-### 工具详细说明
-
-#### `create_terminal` - 创建终端
-创建一个新的持久化终端会话。
-
-**参数**：
-- `shell` (可选): Shell 类型，如 `/bin/bash`、`/bin/zsh`
-- `cwd` (可选): 工作目录
-- `env` (可选): 环境变量对象
-- `cols` (可选): 终端列数，默认 80
-- `rows` (可选): 终端行数，默认 24
-
-**返回**：
-- `terminalId`: 终端 ID
-- `status`: 状态
-- `pid`: 进程 ID
-- `shell`: Shell 类型
-- `cwd`: 工作目录
-
-#### `write_terminal` - 写入命令
-向终端发送命令或输入。
-
-**参数**：
-- `terminalId`: 终端 ID
-- `input`: 要发送的内容
-- `appendNewline` (可选): 是否自动添加换行符，默认 true
-
-**提示**：默认会自动添加换行符执行命令，如需发送原始控制字符（如方向键），请设置 `appendNewline: false`。
-
-#### `read_terminal` - 读取输出
-读取终端的缓冲输出，支持多种智能截断模式。
-
-**参数**：
-- `terminalId`: 终端 ID
-- `mode` (可选): 读取模式
-  - `full`: 完整输出（默认）
-  - `head`: 只读取开头
-  - `tail`: 只读取末尾
-  - `head-tail`: 同时读取开头和末尾
-- `since` (可选): 从第 N 行开始读取（增量读取）
-- `maxLines` (可选): 最大行数，默认 1000
-- `headLines` (可选): head 模式的行数，默认 50
-- `tailLines` (可选): tail 模式的行数，默认 50
-- `stripSpinner` (可选): 是否压缩 Spinner 动画
-
-**返回**：
-- `output`: 输出内容
-- `totalLines`: 总行数
-- `lineRange`: 实际返回的行范围
-- `estimatedTokens`: 估算的 token 数量
-- `truncated`: 是否被截断
-- `spinnerCompacted`: 是否进行了 Spinner 压缩
-
-#### `wait_for_output` - 等待输出稳定
-等待终端输出稳定后再读取，确保获取完整输出。
-
-**参数**：
-- `terminalId`: 终端 ID
-- `timeout` (可选): 最大等待时间（毫秒），默认 5000
-- `stableTime` (可选): 稳定时间（毫秒），默认 500
-
-**使用场景**：
-- 执行命令后确保获取完整输出
-- 等待交互式应用启动完成
-
-#### `fix_bug_with_codex` 🆕 - 自动修复 Bug
-使用 OpenAI Codex CLI 自动分析和修复代码中的 Bug。
-
-**参数**：
-- `description` (必需): 详细的 Bug 描述，必须包含：
-  - 问题症状（具体的错误行为）
-  - 期望行为（应该如何工作）
-  - 问题位置（文件路径、行号、函数名）
-  - 相关代码（有问题的代码片段）
-  - 根本原因（为什么会出现这个问题）
-  - 修复建议（如何修复）
-  - 影响范围（还会影响什么）
-  - 相关文件（所有相关的文件路径）
-  - 测试用例（如何验证修复是否有效）
-  - 上下文信息（有助于理解问题的背景）
-- `cwd` (可选): 工作目录，默认为当前目录
-- `timeout` (可选): 超时时间（毫秒），默认 600000（10 分钟）
-
-**返回**：
-- `terminalId`: 执行 Codex 的终端 ID
-- `reportPath`: 修复报告路径
-- `reportExists`: 报告是否存在
-- `workingDir`: 工作目录
-- `executionTime`: 执行时间（秒）
-- `timedOut`: 是否超时
-- `output`: 终端输出
-- `reportPreview`: 报告预览
-
-**工作流程**：
-1. AI 提供详细的 Bug 描述
-2. 工具将描述保存到 `docs/codex-bug-description-TIMESTAMP.md`
-3. Codex 读取文档并分析问题
-4. Codex 修复 Bug 并生成报告 `docs/codex-fix-TIMESTAMP.md`
-5. AI 读取报告并总结给用户
-
-**重要提示**：
-- ⚠️ 此工具具有完全系统访问权限（`danger-full-access`）
-- ⚠️ Codex 可以修改任何文件，建议在 Git 仓库中使用
-- ✅ 只使用英文描述（避免 UTF-8 编码问题）
-- ✅ 描述越详细，修复质量越高
-
-**示例**：
-```javascript
-fix_bug_with_codex({
-  description: `Username validation bug in auth.js file.
-
-PROBLEM:
-- File: src/auth/login.ts, line 45
-- Code: const usernameRegex = /^[a-zA-Z0-9]{3,20}$/
-- Symptom: Username 'user_name' is rejected with 'Invalid username' error
-- Expected: Should accept usernames with underscores and hyphens
-
-ROOT CAUSE:
-- Regex [a-zA-Z0-9] only allows letters and numbers
-- Missing support for underscore and hyphen characters
-
-SUGGESTED FIX:
-- Change regex to: /^[a-zA-Z0-9_-]{3,20}$/
-
-VERIFICATION:
-- Run: npm test
-- Expected: all tests pass`,
-  cwd: '/path/to/project',
-  timeout: 600000
-})
-```
-
-**详细文档**：
-- [Codex Bug Fix Tool 功能文档](docs/features/CODEX_BUG_FIX_TOOL.md)
-- [Codex Bug Fix Tool 测试报告](docs/features/CODEX_BUG_FIX_TEST_REPORT.md)
-
-> **💡 提示**：Codex CLI 需要 OpenAI API 访问权限。如果你在国内或遇到访问问题，可以考虑使用 [Codex CLI 镜像服务](https://www.codex-cli.top)（¥99/月，每日 $90 额度），让 AI 编程更流畅。
-
-#### `open_terminal_ui` - 打开 Web 管理界面
-启动一个基于浏览器的可视化终端管理界面。
-
-**参数**：
-- `port` (可选): 端口号，默认从 3002 开始自动查找
-- `autoOpen` (可选): 是否自动打开浏览器，默认 true
-
-**返回**：
-- `url`: Web UI 地址
-- `port`: 实际使用的端口
-- `mode`: 启动模式（new/existing）
-- `autoOpened`: 是否自动打开了浏览器
-
-#### `fix_bug_with_codex` 🆕 - 使用 Codex 自动修复 Bug
-调用 OpenAI Codex CLI 自动分析和修复代码中的 bug，并生成详细的修复报告。
-
-**⚠️ 重要提示**：
-- 此工具使用 **完全权限模式**（`--sandbox danger-full-access --ask-for-approval never`）
-- Codex 可以完全控制代码库，请谨慎使用
-- 建议在使用前备份代码或使用版本控制
-
-**参数**：
-- `description` (必填): **详细的** bug 描述，必须包含：
-  - 问题现象（具体的错误表现）
-  - 预期行为（应该如何工作）
-  - 问题位置（文件路径、行号）
-  - 相关代码片段
-  - 根本原因（如果知道）
-  - 修复建议（如果有）
-  - 影响范围（可能影响的功能）
-  - 相关文件（所有相关文件路径）
-  - 测试用例（如何验证修复）
-  - 上下文信息（背景资料）
-- `cwd` (可选): 工作目录，默认当前目录
-- `timeout` (可选): 超时时间（毫秒），默认 600000（10分钟）
-
-**返回**：
-- `terminalId`: 执行 Codex 的终端 ID
-- `reportPath`: 修复报告的路径（`docs/codex-fix-TIMESTAMP.md`）
-- `reportExists`: 报告是否成功生成
-- `executionTime`: 执行时间
-- `output`: Codex 的终端输出
-
-**工作流程**：
-1. AI 助手收集详细的 bug 信息
-2. 调用此工具，传入详细描述
-3. Codex 分析问题并修复代码
-4. Codex 在 `docs/` 目录生成详细报告
-5. AI 助手读取报告并向用户汇报
-
-**报告内容**：
-- 问题描述
-- 修改的文件列表
-- 每个文件的具体修改（修改前/修改后对比）
-- 修改原因说明
-- 测试建议
-- 注意事项
-
-**使用示例**：
-```
-用户：登录功能有 bug，用户名验证总是失败
-
-AI 助手：
-1. [查看相关文件，理解问题]
-2. [调用 fix_bug_with_codex]
-   {
-     "description": "登录功能用户名验证存在 bug，具体表现：
-     1. 问题现象：用户输入 'user_name' 时被拒绝
-     2. 预期行为：应该接受包含下划线的用户名
-     3. 问题位置：src/auth/login.ts 第 45 行
-     4. 相关代码：const usernameRegex = /^[a-zA-Z0-9]{3,20}$/
-     5. 根本原因：正则表达式不允许下划线
-     ..."
-   }
-3. [等待 Codex 完成]
-4. [读取报告] view("docs/codex-fix-2025-10-18T00-35-12.md")
-5. [向用户汇报修复结果]
-```
-
-**前置要求**：
-- 已安装 Codex CLI：`npm install -g @openai/codex-cli`
-- 已配置 Codex 认证
-- 项目中存在 `docs/` 目录
-
-**最佳实践**：
-- 提供尽可能详细的 bug 描述（描述越详细，修复质量越高）
-- 在调用前先查看相关文件，理解问题
-- 修复后务必运行测试验证
-- 查看生成的报告了解具体修改
-- 使用版本控制，便于回滚
-
-## 🌐 Web 管理界面
-
-### 功能特性
-- 📊 **终端列表**：查看所有终端的状态、PID、Shell、工作目录等信息
-- 🖥️ **实时终端**：使用 xterm.js 渲染终端输出，支持 ANSI 颜色
-- ⚡ **实时更新**：WebSocket 推送，终端输出实时显示
-- ⌨️ **交互操作**：直接在浏览器中发送命令
-- 🎨 **VS Code 风格**：暗色主题，简洁美观
-- 🔄 **自动端口**：支持多实例，自动避免端口冲突
-
-### 快速使用
-在 Claude 或其他 MCP 客户端中说：
-```
-请打开终端管理界面
-```
-
-或者直接运行测试脚本：
-```bash
-npm run test:webui
-```
-
-详细使用说明见 [Web UI 使用指南](docs/guides/WEB_UI_USAGE.md)。
-
-## 🔌 REST API（可选）
-
-如果需要 HTTP 接口，可启动 REST 版本：
-```bash
-npx persistent-terminal-mcp-rest
-```
-
-服务器默认监听 `3001` 端口（可配置），端点与 MCP 工具一一对应：
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/terminals` | POST | 创建终端 |
-| `/api/terminals` | GET | 列出所有终端 |
-| `/api/terminals/:id` | GET | 获取终端详情 |
-| `/api/terminals/:id` | DELETE | 终止终端 |
-| `/api/terminals/:id/input` | POST | 发送命令 |
-| `/api/terminals/:id/output` | GET | 读取输出 |
-| `/api/terminals/:id/stats` | GET | 获取统计信息 |
-
-## 📁 项目结构
-
-```
-persistent-terminal-mcp/
-├── src/                    # TypeScript 源码
-│   ├── index.ts           # MCP 服务器入口
-│   ├── mcp-server.ts      # MCP 服务器实现
-│   ├── terminal-manager.ts # 终端管理器
-│   ├── output-buffer.ts   # 输出缓冲区
-│   ├── web-ui-manager.ts  # Web UI 管理器
-│   ├── web-ui-server.ts   # Web UI 服务器
-│   ├── rest-server.ts     # REST API 服务器
-│   ├── types.ts           # 类型定义
-│   ├── __tests__/         # 单元测试
-│   └── examples/          # 示例脚本
-├── dist/                   # 编译后的 JavaScript
-├── public/                 # Web UI 静态文件
-├── docs/                   # 文档
-│   ├── guides/            # 使用指南
-│   ├── reference/         # 技术参考
-│   ├── clients/           # 客户端配置
-│   └── zh/                # 中文文档
-├── tests/                  # 测试套件
-│   └── integration/       # 集成测试
-└── scripts/                # 辅助脚本
-```
-
-## 📚 文档导航
-
-### 快速访问
-- 📖 [完整文档索引](docs/README.md)
-- 🚨 [修复文档索引](docs/reference/fixes/README.md)
-- 🧪 [集成测试说明](tests/integration/README.md)
-- 🌐 [Web UI 使用指南](docs/guides/WEB_UI_USAGE.md)
-
-### 按分类
-- **使用指南**：[使用说明](docs/guides/usage.md) | [故障排查](docs/guides/troubleshooting.md) | [MCP 配置](docs/guides/mcp-config.md)
-- **技术参考**：[技术细节](docs/reference/technical-details.md) | [工具总结](docs/reference/tools-summary.md)
-- **修复文档**：[Stdio 修复](docs/reference/fixes/STDIO_FIX.md) | [Cursor 修复](docs/reference/fixes/CURSOR_FIX_SUMMARY.md) | [终端修复](docs/reference/fixes/TERMINAL_FIXES.md)
-- **客户端配置**：[Claude Desktop/Code](docs/clients/claude-code-setup.md)
-
-## 🔍 重要说明
-
-### Stdio 纯净性
-本 MCP 服务器严格遵循 MCP 协议，确保 stdout 只包含 JSON-RPC 消息，所有日志输出到 stderr。这保证了与 Cursor 等严格客户端的完全兼容。详见 [Stdio 修复文档](docs/reference/fixes/STDIO_FIX.md)。
-
-### Cursor 兼容性
-完全兼容 Cursor 及其他要求严格 JSON-RPC 通信的 MCP 客户端。快速设置见 [快速修复指南](docs/reference/fixes/QUICK_FIX_GUIDE.md)。
-
-### 终端交互
-支持交互式应用（vim、npm create 等），正确处理 ANSI 转义序列。详见 [终端修复文档](docs/reference/fixes/TERMINAL_FIXES.md)。
-
-### 输出稳定性
-使用 `wait_for_output` 工具确保命令执行后获取完整输出，避免读取不完整的数据。
-
-## 🧪 测试
-
-### 运行测试
-```bash
-npm test                     # 运行所有单元测试
-npm run test:integration     # 运行所有集成测试
-npm run test:all            # 运行所有测试
-```
-
-### 集成测试
-```bash
-npm run test:integration:stdio      # Stdio 纯净性测试
-npm run test:integration:cursor     # Cursor 场景测试
-npm run test:integration:terminal   # 终端功能测试
-```
-
-## 🤝 贡献指南
-
-欢迎提 Issue 或 PR！详细流程与代码规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-### 贡献方式
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
-
-## 📄 开源许可
-
-本项目以 [MIT 许可证](LICENSE) 发布。
-
-## 🙏 致谢
-
-- [node-pty](https://github.com/microsoft/node-pty) - 强大的 PTY 库
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP 协议规范
-- [xterm.js](https://xtermjs.org/) - 优秀的终端模拟器
-
-## 📞 支持
-
-- 📖 查看 [文档](docs/README.md)
-- 🐛 提交 [Issue](https://github.com/yourusername/node-pty/issues)
-- 💬 参与 [讨论](https://github.com/yourusername/node-pty/discussions)
 
 ---
 
-**最后更新**: 2025-10-08
-**版本**: 1.0.1
+## Security & Best Practices
+
+* **Privilege separation:** Run the server as a non-root user. Avoid exposing the server on public networks without a reverse proxy and authentication.
+* **Authentication:** If exposing REST or Web UI, add an authentication layer (HTTP basic auth, token-based, or integrate behind an authenticated gateway).
+* **Network exposure:** Bind to `localhost` by default. If you must listen on a public interface, enable TLS and strong authentication.
+* **Input validation:** Ensure clients are trusted — arbitrary command execution is sensitive. Use policy-based allowlists if necessary.
+* **Resource limits:** Monitor and limit concurrent session counts, PTY memory usage, and per-session CPU/time if running untrusted workloads.
+
+---
+
+## Deployment
+
+Typical deployment patterns:
+
+* **Local dev:** `npm run dev`
+* **Single-server:** run as a systemd service with a process supervisor. Use environment variables for configuration and optionally a reverse proxy for TLS.
+* **Containerized:** build a small Docker image. Ensure you configure user, volumes for logs if needed, and resource limits.
+
+Example `systemd` unit (sketch):
+
+```ini
+[Unit]
+Description=Persistent Terminal MCP
+
+[Service]
+User=someuser
+WorkingDirectory=/srv/persistent-terminal-mcp
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+Environment=MCP_PORT=3456
+```
+
+---
+
+## Diagnostics & Debugging
+
+* Enable `MCP_DEBUG=true` to log debug information to stderr.
+* Use the Web UI to inspect active PTY processes and recent output.
+* For crash analysis, capture the server stderr and the PTY process logs.
+* The server exposes simple health endpoints in REST mode for readiness/liveness checks.
+
+---
+
+## Automated Fixes & Tooling (Optional)
+
+This project contains optional automation hooks (e.g., integrations that attempt to run automated code fixes using model-driven tooling). These features are **opt-in** and typically operate like this:
+
+1. Agent gathers context (project files, failing command logs).
+2. Agent proposes a fix via a codex/LLM-powered workflow.
+3. Fix is applied optionally and a diff/report is saved to `docs/fixes/`.
+
+> CAUTION: These automated flows may modify files. Use them in controlled environments only and ensure backups or VCS protections are in place.
+
+---
+
+## Contributing
+
+Contributions are welcome.
+
+Suggested workflow:
+
+1. Fork the repository.
+2. Create a feature branch: `git checkout -b feat/my-feature`.
+3. Run tests and linters locally.
+4. Open a PR describing the change and rationale.
+
+Please include tests for new features where appropriate, and keep changes small and focused.
+
+---
+
+## Example Troubleshooting Scenarios
+
+* **“My command output is missing or truncated”**
+
+  * Check buffer size (`BUFFER_LINES`). If command produces > buffer, use incremental reads (`since`) or `tail` to fetch the end of output.
+  * Ensure spinner compression isn’t removing relevant lines — adjust spinner thresholds.
+* **“Sessions are disappearing”**
+
+  * Inspect `SESSION_IDLE_TIMEOUT` and confirm session wasn't auto-evicted.
+* **“Web UI fails to display colors correctly”**
+
+  * Confirm xterm.js is connected via WebSocket and the terminal app sends ANSI sequences (some programs detect non-ttys and change output).
+
+---
+
+## License
+
+This project is provided under the license included in the repository. Please consult the `LICENSE` file for full details.
+
+---
+
+## Acknowledgements
+
+* Inspired by needs of AI agent tooling and long-lived developer sessions.
+* Uses open-source libraries such as `node-pty`, `xterm.js`, and TypeScript.
+
+---
+
+## Contact / Further Reading
+
+If you want help deploying, integrating with an AI assistant, or customizing the server behavior (buffering strategy, spinner handling, or MCP wiring), open an issue or discussion on the repository.
+
+---
+
+### Changelog (high level)
+
+* Initial release: persistent PTY sessions, MCP + REST interfaces, web UI, spinner compression, incremental reads.
+* Future items: per-session authentication hooks, metrics/telemetry, advanced quotas and sandboxing.
+
+https://chatgpt.com/share/68f852ca-f0ac-8013-9c12-f93355c24d60
